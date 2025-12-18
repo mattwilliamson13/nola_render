@@ -2,43 +2,17 @@ library(lidR)         # LiDAR tools
 library(tidyverse)
 library(sf)
 library(terra)    
+library(rayshader)
 
-library(arrow)
-buildings <- open_dataset('s3://overturemaps-us-west-2/release/2025-11-19.0/theme=buildings/type=building')
-
-nrow(buildings)
-
-nola_bbox <- tigris::counties(state = "LA", cb = TRUE, resolution = "20m") |> 
-  filter(NAME %in% c("Jefferson", "St. Charles", "Orleans", "St. Bernard")) |> 
-  st_bbox() |> 
-  as.vector()
-
-nola_buildings <- buildings |>
-  filter(bbox$xmin > nola_bbox[1],
-         bbox$ymin > nola_bbox[2],
-         bbox$xmax < nola_bbox[3],
-         bbox$ymax < nola_bbox[4]) |>
-  select(id, geometry, height) |> 
-  collect() |>
-  st_as_sf(crs = 4326)
-
-nola_buildings_p <- nola_buildings %>% st_transform(., st_crs(gno_las[[1]]))
-
-bldg_pts <- clip_roi(gno_las[[1]], nola_buildings_p)
-bldg_pts <- bldg_pts[lengths(bldg_pts) > 0]
-
-bldgpts <- do.call(rbind, bldg_pts)
-
-
-tst_canopy <- rasterize_canopy(gno_las[[1]])
-tst_bld <- rasterize_canopy(bldgpts)
 
 filepaths <- read_table("data/original/downloadlist.txt", col_names = "file_link")
-local_fp <- "/Users/mattwilliamson/Downloads/noladownload.laz"
+filepaths_update <- read_table("data/original/downloadlist_update.txt", col_names = "file_link")
 
 gno_filepaths <- filepaths[grepl("GreaterNewOrleans", filepaths$file_link),]
+gno_updates <- filepaths_update[grepl("GreaterNewOrleans", filepaths_update$file_link),]
 
-
+gno_subset <- gno_updates %>% 
+  filter(!file_link %in% gno_filepaths$file_link)
 
 dl_las_terrain <- function(destlink){
   tmp_las <- tempfile(fileext = ".laz")
@@ -72,26 +46,47 @@ safe_dl <- function(x) {
 plan(multisession, workers = 20)
 
 gno_las <- future_map(
-  gno_filepaths[[1]][121:366],
+  gno_subset[[1]][101:206],
   safe_dl,
   .options = furrr_options(stdout = TRUE)
 )
 
 
-ter_rasts <- list.files("data/processed/", pattern = "terrain.tif", full.names = TRUE)
-terrain <- map(ter_rasts, rast)
-ter_rsc <- sprc(terrain)
-ter_mosaic <- mosaic(ter_rsc, fun = "min")
-
-can_rasts <- list.files("data/processed/", pattern = "canopy.tif", full.names = TRUE)
-canopy <- map(can_rasts, rast)
-can_rsc <- sprc(canopy)
-can_mosaic <- mosaic(can_rsc, fun = "max")
 
 
-old_map <- rast("/Users/mattwilliamson/Downloads/commonwealth_wd376434p_image_georectified_primary.tif")[[1:3]]
-om_ext <- ext(old_map)
-om_ext_p <- project(x = om_ext, from = crs(old_map), to = crs(ter_mosaic))
-om_proj <- project(old_map, crs(can_mosaic))
-can_crop <- crop(ter_mosaic, om_proj)
+
+
+
+
+nola_mtx <- raster_to_matrix(complete_crop)
+nola_small <- resize_matrix(nola_mtx, 0.15) 
+
+
+
+nola_small %>% 
+  sphere_shade(texture = "bw", colorintensity = 10, zscale = 3, sunangle = 45) %>%
+  add_water(detect_water(nola_small,zscale = 2), color="imhof4") %>% 
+  add_overlay(overlay = topo_rgb_array, alphalayer = 0.9) %>%
+  add_shadow(lamb_shade(nola_small, sunaltitude = 30),0) %>%
+  plot_map()
+
+
+
+
+#rgb <- hist_map_proj[[1:3]]
+#rgb[rgb == 0] <- NA
+#hist_rgb <- as.array(rgb) / 255
+#names(hist_rgb) <- c("r", "g", "b")
+names(hist_map_proj) <- c("r", "g", "b")
+topo_r <- resize_matrix(raster_to_matrix(hist_map_proj$r), 0.15)
+topo_g <- resize_matrix(raster_to_matrix(hist_map_proj$g), 0.15)
+topo_b <- resize_matrix(raster_to_matrix(hist_map_proj$b), 0.15)
+
+#rgb_small <- resize_matrix(hist_rgb, 0.15)
+topo_rgb_array <- array(0, dim = c(nrow(topo_r), ncol(topo_r), 3))
+
+
+
+
+
 
