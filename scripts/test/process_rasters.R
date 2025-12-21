@@ -23,7 +23,8 @@ complete_crop[is.na(complete_crop)] <- 1
 hist_map_proj <- project(
   old_map,
   complete_crop,
-  method = "near"   # critical for maps
+  method = "near",
+  threads = TRUE# critical for maps
 )
 
 #hist_map_proj <- resample(
@@ -93,31 +94,37 @@ library(arrow)
 buildings <- open_dataset('s3://overturemaps-us-west-2/release/2025-11-19.0/theme=buildings/type=building')
 library(sf)
 
-nola_bbox <-  st_bbox(c(
-  xmin = xmin(e),
-  ymin = ymin(e),
-  xmax = xmax(e),
-  ymax = ymax(e)
-), crs = st_crs(crs(complete_crop))) |> 
-  st_transform(x=_, crs = "EPSG:4269") |> 
-  as.vector()
-
+nola_bbox <- nl_ext
+nola_bbox_p <- project(nola_bbox, "epsg:4326") %>% 
+  st_as_sf() %>% 
+  st_bbox()
 nola_buildings <- buildings |>
-  dplyr::filter(bbox$xmin > nola_bbox[1],
-         bbox$ymin > nola_bbox[2],
-         bbox$xmax < nola_bbox[3],
-         bbox$ymax < nola_bbox[4]) |>
+  dplyr::filter(bbox$xmin > nola_bbox_p[1],
+                bbox$ymin > nola_bbox_p[2],
+                bbox$xmax < nola_bbox_p[3],
+                bbox$ymax < nola_bbox_p[4]) |>
   dplyr::select(id, geometry, height) |> 
   dplyr::collect() |>
   st_as_sf(crs = 4326)
 
-nola_buildings_p <- nola_buildings %>% st_transform(., st_crs(complete_crop)) |> 
-  dplyr::filter(height < 30)
+nola_buildings_p <- nola_buildings %>% st_transform(., st_crs(complete_crop)) %>% 
+  tidyr::drop_na(height) %>% 
+  dplyr::filter(height <10)
 
-render_buildings(nola_buildings_p,  flat_shading  = TRUE, 
-                 angle = 30 , heightmap = nola_mtx, 
-                 material = "gray", roof_material = "gray",
-                 extent = e, roof_height = 3, base_height = 0,data_column_top = nola_buildings_p$height
-                 zscale=10)
+nola_cln <-st_cast(nola_buildings_p, "MULTIPOLYGON") %>% st_cast("POLYGON") 
+nola_cln <- nola_cln[!tst,]
+tst <- st_within(nola_cln, st_as_sf(box), sparse = FALSE)
+
+
+
+render_buildings(nola_cln,  flat_shading  = TRUE, 
+                 angle = 15 , heightmap = nola_mtx, 
+                 material = "#E6F2FF", roof_material = "#E6F2FF",
+                 extent = ext(nola_bbox), roof_height = 0.75, base_height = 0, data_column_top = "height",
+                 alpha=0.01,
+                 zscale=10, color = "#E6F2FF",
+                 shadow = FALSE,
+                 light_intensity = 0.3,
+                 clear_previous = TRUE)
 render_camera(theta=220, phi=22, zoom=0.45, fov=0)
 render_snapshot()
